@@ -1,0 +1,212 @@
+syntax = "proto3";
+
+package federated_ai;
+
+// ══════════════════════════════════════════════════════════════
+// Vector Database
+// ══════════════════════════════════════════════════════════════
+
+message Vector {
+  string id = 1;
+  repeated float values = 2;
+  map<string, string> metadata = 3;
+}
+
+message InsertRequest {
+  repeated Vector vectors = 1;
+}
+
+message InsertResponse {
+  int32 inserted = 1;
+}
+
+message SearchRequest {
+  repeated float query = 1;
+  int32 k = 2;
+  map<string, string> filter = 3;
+}
+
+message SearchResult {
+  string id = 1;
+  repeated float values = 2;
+  float distance = 3;
+  map<string, string> metadata = 4;
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+message DeleteRequest {
+  repeated string ids = 1;
+}
+
+message DeleteResponse {
+  int32 deleted = 1;
+}
+
+message StatsRequest {}
+
+message StatsResponse {
+  int64 total_vectors = 1;
+  int32 dimension = 2;
+  int64 index_size = 3;
+  int64 audit_chain_length = 4;
+  bool audit_chain_valid = 5;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Audit Trail
+// ══════════════════════════════════════════════════════════════
+
+message AuditEntry {
+  uint64 sequence = 1;
+  string timestamp = 2;
+  string event_type = 3;
+  string node_id = 4;
+  map<string, string> metadata = 5;
+  string hash = 6;
+  string prev_hash = 7;
+}
+
+message AuditQuery {
+  int32 limit = 1;
+  string event_type = 2;
+  string node_id = 3;
+}
+
+message AuditTrailResponse {
+  repeated AuditEntry entries = 1;
+  bool chain_valid = 2;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Health
+// ══════════════════════════════════════════════════════════════
+
+message HealthRequest {}
+message HealthResponse {
+  string status = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Med GPS — 罕见病就医导航
+// ══════════════════════════════════════════════════════════════
+
+// 患者画像
+message PatientProfile {
+  string disease_name = 1;           // 疾病名称（中/英文）
+  string disease_name_en = 2;        // 英文疾病名
+  string symptoms = 3;               // 当前症状描述
+  string stage = 4;                  // 疾病阶段：early / mid / late / unknown
+  string city = 5;                   // 所在城市
+  string country = 6;                // 所在国家
+  float budget_usd = 7;              // 预算（美元）
+  string insurance = 8;              // 保险类型
+  string urgency = 9;                // 紧急程度：routine / urgent / emergency
+  string language = 10;              // 语言偏好
+  string age_group = 11;             // 年龄段：child / adult / elderly
+  string genetic_info = 12;          // 基因检测结果（如有）
+  repeated string previous_treatments = 13;  // 已尝试的治疗方案
+}
+
+// 导航步骤
+message NavigationStep {
+  int32 step_number = 1;
+  string step_type = 2;              // diagnosis / treatment / trial / logistics / followup
+  string title = 3;                  // 步骤标题
+  string description = 4;            // 详细描述
+  string target_hospital = 5;        // 目标医院
+  string target_doctor = 6;          // 目标医生/科室
+  float estimated_cost_usd = 7;      // 预估费用
+  int32 estimated_days = 8;          // 预估天数
+  float confidence = 9;              // 推荐置信度 [0,1]
+  repeated string reasons = 10;      // 推荐理由
+  string source_type = 11;           // evidence / experience / guideline
+  string audit_hash = 12;            // 审计链哈希（可追溯）
+}
+
+// 导航路线
+message NavigationRoute {
+  string route_id = 1;
+  string patient_summary = 2;        // 患者情况摘要
+  repeated NavigationStep steps = 3;  // 导航步骤
+  float total_estimated_cost = 4;    // 总预估费用
+  int32 total_estimated_days = 5;    // 总预估天数
+  float overall_confidence = 6;      // 总体置信度
+  repeated string similar_experiences = 7;  // 相似病友经验 ID
+  string generated_at = 8;           // 生成时间
+  string audit_hash = 9;             // 审计链哈希
+}
+
+// 导航请求
+message NavigateRequest {
+  PatientProfile profile = 1;
+  bool include_trials = 2;           // 是否包含临床试验推荐
+  bool include_experiences = 3;      // 是否包含病友经验
+  int32 max_hospitals = 4;           // 最多推荐医院数
+}
+
+// 导航响应
+message NavigateResponse {
+  NavigationRoute route = 1;
+  repeated SearchResult matched_hospitals = 2;   // HNSW 匹配的医院
+  repeated SearchResult matched_experiences = 3;  // HNSW 匹配的病友经验
+  string status = 4;                              // success / partial / failed
+}
+
+// 病友经验
+message PatientExperience {
+  string experience_id = 1;
+  string disease_name = 2;
+  string patient_age_group = 3;
+  string patient_city = 4;
+  string hospital_visited = 5;
+  string doctor_name = 6;
+  string treatment_received = 7;
+  string outcome = 8;               // improved / stable / worsened
+  float satisfaction_score = 9;      // 满意度 [0,10]
+  string tips = 10;                  // 给其他患者的建议
+  int64 cost_total_usd = 11;         // 实际总费用
+  int32 duration_days = 12;          // 实际就医天数
+  string submitted_at = 13;
+}
+
+// 提交经验请求
+message SubmitExperienceRequest {
+  PatientExperience experience = 1;
+}
+
+// 提交经验响应
+message SubmitExperienceResponse {
+  bool success = 1;
+  string experience_id = 2;
+  string audit_hash = 3;
+}
+
+// ══════════════════════════════════════════════════════════════
+// Services
+// ══════════════════════════════════════════════════════════════
+
+service VectorDatabase {
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  rpc Search(SearchRequest) returns (SearchResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Stats(StatsRequest) returns (StatsResponse);
+}
+
+service AuditService {
+  rpc GetTrail(AuditQuery) returns (AuditTrailResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+service MedGpsService {
+  // 智能导航：患者画像 → 推荐路线
+  rpc Navigate(NavigateRequest) returns (NavigateResponse);
+  // 提交病友经验（向量化后存入 HNSW）
+  rpc SubmitExperience(SubmitExperienceRequest) returns (SubmitExperienceResponse);
+  // 查询相似病友经验
+  rpc FindSimilarExperiences(SearchRequest) returns (SearchResponse);
+}

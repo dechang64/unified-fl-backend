@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  unified-fl-backend:
+    build: .
+    container_name: unified-fl-backend
+    restart: unless-stopped
+    ports:
+      - "50051:50051"   # gRPC
+      - "8080:8080"     # HTTP REST
+    volumes:
+      - fl-data:/data
+    environment:
+      - RUST_LOG=info
+      - FL_DIMENSION=384
+      - FL_GRPC_PORT=50051
+      - FL_HTTP_PORT=8080
+      - FL_DB_PATH=/data/vectors.db
+      - FL_MAX_AUDIT_BLOCKS=10000
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+    networks:
+      - fl-network
+
+volumes:
+  fl-data:
+    driver: local
+
+networks:
+  fl-network:
+    driver: bridge

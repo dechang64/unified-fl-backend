@@ -1,0 +1,65 @@
+[package]
+name = "unified-fl-backend"
+version = "0.4.0"
+edition = "2021"
+description = "FedCtx — Federated Semantic Infrastructure: HNSW + Graph + Audit + Memory + gRPC + REST + MCP"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# gRPC
+tonic = "0.13"
+prost = "0.13"
+
+# HTTP REST
+axum = "0.8"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database (persistence)
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Vector Search (self-implemented HNSW)
+hnsw = "0.11"
+space = "0.17"
+rand = "0.8"
+
+# Crypto & Audit
+sha2 = "0.10"
+hex = "0.4"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+base64 = "0.22"
+
+# Logging & Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Date/Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Config
+clap = { version = "4", features = ["derive", "env"] }
+
+# Async helpers
+futures = "0.3"
+async-trait = "0.1"
+rmcp = { version = "1.7.0", features = ["server", "transport-io"] }
+schemars = "1.2.1"
+uuid = { version = "1", features = ["v4"] }
+
+[build-dependencies]
+tonic-build = "0.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
