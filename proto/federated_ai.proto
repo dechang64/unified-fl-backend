@@ -210,3 +210,152 @@ service MedGpsService {
   // 查询相似病友经验
   rpc FindSimilarExperiences(SearchRequest) returns (SearchResponse);
 }
+
+// ══════════════════════════════════════════════════════════════
+// Federated Learning — 联邦学习聚合
+// ══════════════════════════════════════════════════════════════
+
+message ModelUpdateProto {
+  string client_id = 1;
+  uint32 round = 2;
+  repeated float parameters = 3;
+  int64 num_samples = 4;
+  float train_loss = 5;
+  double entropy = 6;
+}
+
+message SubmitUpdateRequest {
+  ModelUpdateProto update = 1;
+}
+
+message SubmitUpdateResponse {
+  bool accepted = 1;
+  uint32 current_round = 2;
+  int32 updates_received = 3;
+}
+
+message AggregateRequest {
+  uint32 round = 1;
+  string strategy = 2;           // fedavg / fedprox / ewa
+  int32 min_clients = 3;         // 最少参与客户端数
+  double dp_epsilon = 4;         // 差分隐私 epsilon（0=不启用）
+  double dp_delta = 5;           // 差分隐私 delta
+  double dp_clip_norm = 6;       // 梯度裁剪范数
+  double fedprox_mu = 7;         // FedProx 近端项系数
+  double ewa_alpha = 8;          // EWA 熵权重指数
+}
+
+message AggregateResponse {
+  repeated float global_parameters = 1;
+  uint32 round = 2;
+  int32 num_clients = 3;
+  int64 total_samples = 4;
+  string strategy = 5;
+  map<string, double> client_weights = 6;  // client_id → weight
+  double aggregation_time_ms = 7;
+}
+
+message GetModelRequest {
+  uint32 round = 1;              // 0 = latest
+}
+
+message GetModelResponse {
+  repeated float parameters = 1;
+  uint32 round = 2;
+  int32 num_clients = 3;
+  string strategy = 4;
+}
+
+message FlRoundState {
+  uint32 round = 1;
+  int32 num_updates = 2;
+  string status = 3;             // collecting / aggregated
+  repeated string client_ids = 4;
+}
+
+message ListRoundsRequest {
+  int32 limit = 1;
+}
+
+message ListRoundsResponse {
+  repeated FlRoundState rounds = 1;
+}
+
+service FederatedLearning {
+  // 客户端提交模型更新
+  rpc SubmitUpdate(SubmitUpdateRequest) returns (SubmitUpdateResponse);
+  // 服务端触发聚合
+  rpc Aggregate(AggregateRequest) returns (AggregateResponse);
+  // 获取全局模型
+  rpc GetModel(GetModelRequest) returns (GetModelResponse);
+  // 列出所有轮次状态
+  rpc ListRounds(ListRoundsRequest) returns (ListRoundsResponse);
+}
+
+// ══════════════════════════════════════════════════════════════
+// GraphRAG — 图谱增强检索
+// ══════════════════════════════════════════════════════════════
+
+message GraphRAGQuery {
+  string query = 1;              // 查询文本
+  int32 top_k = 2;               // 向量检索 top-k
+  int32 max_hops = 3;            // 图谱最大跳数
+  int32 max_nodes = 4;           // 返回最大节点数
+  double min_score = 5;          // 最低相关性阈值
+  double vector_weight = 6;      // 向量分数权重
+  double centrality_weight = 7;  // 中心性分数权重
+}
+
+message ScoredNodeProto {
+  string id = 1;
+  string label = 2;
+  map<string, string> properties = 3;
+  float vector_score = 4;
+  float centrality_score = 5;
+  float combined_score = 6;
+}
+
+message SubgraphEdgeProto {
+  string id = 1;
+  string source = 2;
+  string target = 3;
+  string label = 4;
+}
+
+message GraphRAGResponse {
+  string query = 1;
+  repeated ScoredNodeProto nodes = 2;
+  repeated SubgraphEdgeProto edges = 3;
+  int32 total_candidates = 4;
+  int32 total_expanded = 5;
+  double retrieval_time_ms = 6;
+}
+
+service GraphRAGService {
+  // GraphRAG 查询：文本 → 向量检索 → 图谱扩展 → 重排序
+  rpc Query(GraphRAGQuery) returns (GraphRAGResponse);
+}
+
+// ══════════════════════════════════════════════════════════════
+// Embedding — 文本向量化
+// ══════════════════════════════════════════════════════════════
+
+message EmbedRequest {
+  repeated string texts = 1;
+}
+
+message EmbedResponse {
+  repeated EmbeddingResult results = 1;
+  string provider = 2;           // hash / onnx
+  int32 dimension = 3;
+}
+
+message EmbeddingResult {
+  string text = 1;
+  repeated float values = 2;
+}
+
+service EmbeddingService {
+  // 文本 → 向量
+  rpc Embed(EmbedRequest) returns (EmbedResponse);
+}

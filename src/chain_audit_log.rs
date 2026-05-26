@@ -15,7 +15,7 @@ pub struct ChainAuditLog {
 impl ChainAuditLog {
     pub fn new(max_blocks: usize) -> Self {
         Self {
-            chain: Arc::new(std::sync::RwLock::new(AuditChain::new(max_blocks))),
+            chain: Arc::new(parking_lot::RwLock::new(AuditChain::new(max_blocks))),
         }
     }
 
@@ -64,9 +64,7 @@ impl AuditLog for ChainAuditLog {
         node_id: &str,
         metadata: HashMap<String, String>,
     ) -> Result<AuditEntry, AuditLogError> {
-        let mut chain = self.chain.write().map_err(|e| {
-            AuditLogError::Internal(format!("audit lock poisoned: {e}"))
-        })?;
+        let mut chain = self.chain.write();
 
         let event = EventType::Custom {
             name: event_type.to_string(),
@@ -86,16 +84,14 @@ impl AuditLog for ChainAuditLog {
     }
 
     async fn verify(&self) -> Result<(), AuditLogError> {
-        let chain = self.chain.read().map_err(|e| {
-            AuditLogError::Internal(format!("audit lock poisoned: {e}"))
-        })?;
+        let chain = self.chain.read();
         chain.verify().map_err(|e| {
             AuditLogError::ChainBroken(e.to_string())
         })
     }
 
     async fn recent(&self, n: usize) -> Vec<AuditEntry> {
-        let chain = self.chain.read().unwrap();
+        let chain = self.chain.read();
         chain
             .recent(n)
             .iter()
@@ -112,6 +108,6 @@ impl AuditLog for ChainAuditLog {
     }
 
     async fn len(&self) -> usize {
-        self.chain.read().unwrap().len()
+        self.chain.read().len()
     }
 }

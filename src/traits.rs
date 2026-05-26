@@ -193,6 +193,11 @@ pub trait AuditLog: Send + Sync {
 
     /// Get total entry count.
     async fn len(&self) -> usize;
+
+    /// Whether the audit log is empty.
+    async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -342,13 +347,17 @@ pub struct MemoryStoreStats {
 
 /// Core stores passed to scenario plugins at initialization.
 ///
-/// Uses concrete types (not trait objects) so plugins can access
-/// the full API of each store. This is intentional — plugins are
-/// compiled into the same binary, so dynamic dispatch is unnecessary.
+/// All stores use trait objects for uniform abstraction — plugins depend
+/// on traits, not concrete types. This allows swapping implementations
+/// (e.g., HnswVectorStore → QdrantVectorStore) without changing plugin code.
 #[derive(Clone)]
 pub struct CoreStores {
-    pub vector_db: crate::vector_db::SharedVectorDB,
+    pub vector_store: std::sync::Arc<dyn VectorStore>,
     pub graph_store: std::sync::Arc<dyn GraphStore>,
-    pub audit_chain: crate::audit::SharedAuditChain,
+    pub audit_log: std::sync::Arc<dyn AuditLog>,
     pub memory_store: std::sync::Arc<dyn MemoryStore>,
+    /// Federated learning aggregation engine.
+    pub fl_engine: Option<std::sync::Arc<crate::fl_engine::FlEngine>>,
+    /// Text-to-vector embedding provider.
+    pub embedding: Option<std::sync::Arc<dyn crate::embedding::EmbeddingProvider>>,
 }

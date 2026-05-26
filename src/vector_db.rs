@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
+use parking_lot::{Mutex, RwLock as PLRwLock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,18 +19,18 @@ impl space::Metric<Vec<f32>> for Cosine {
     type Unit = u32;
     fn distance(&self, a: &Vec<f32>, b: &Vec<f32>) -> u32 {
         let len = a.len().min(b.len());
-        let mut dot = 0.0f32;
-        let mut norm_a = 0.0f32;
-        let mut norm_b = 0.0f32;
+        let mut dot = 0.0f64;
+        let mut norm_a = 0.0f64;
+        let mut norm_b = 0.0f64;
         for i in 0..len {
-            dot += a[i] * b[i];
-            norm_a += a[i] * a[i];
-            norm_b += b[i] * b[i];
+            dot += a[i] as f64 * b[i] as f64;
+            norm_a += a[i] as f64 * a[i] as f64;
+            norm_b += b[i] as f64 * b[i] as f64;
         }
         let denom = norm_a.sqrt() * norm_b.sqrt();
         let similarity = if denom > 1e-10 { dot / denom } else { 0.0 };
         let dist = 1.0 - similarity;
-        (dist * 1_000_000.0).clamp(0.0, u32::MAX as f32) as u32
+        (dist * 1_000_000.0).round().clamp(0.0, u32::MAX as f64) as u32
     }
 }
 
@@ -113,7 +114,7 @@ impl<const M: usize, const M0: usize> HnswIndex<M, M0> {
             .iter()
             .filter_map(|neighbor| {
                 self.id_to_string.get(&neighbor.index).map(|id| {
-                    let distance = f32::from_bits(neighbor.distance);
+                    let distance = neighbor.distance as f32 / 1_000_000.0;
                     (id.clone(), distance)
                 })
             })
@@ -185,10 +186,10 @@ impl VectorDB {
 
         // If updating, soft-remove old entry from HNSW first
         if is_update {
-            self.hnsw.lock().unwrap().remove(&id);
+            self.hnsw.lock().remove(&id);
         }
 
-        self.hnsw.lock().unwrap().insert(&id, &entry.values);
+        self.hnsw.lock().insert(&id, &entry.values);
         self.entries.insert(id, entry);
         Ok(())
     }
@@ -198,7 +199,7 @@ impl VectorDB {
             return Vec::new();
         }
         let ef = k.max(50);
-        let raw = self.hnsw.lock().unwrap().search(query, k, ef);
+        let raw = self.hnsw.lock().search(query, k, ef);
         raw.into_iter()
             .filter_map(|(id, distance)| {
                 // Convert distance back to similarity score
@@ -224,7 +225,7 @@ impl VectorDB {
         if let Some(filter) = filter {
             results.retain(|hit| {
                 filter.iter().all(|(k, v)| {
-                    hit.metadata.get(k).map_or(false, |hv| hv == v)
+                    hit.metadata.get(k) == Some(v)
                 })
             });
             results.truncate(k);
@@ -236,7 +237,7 @@ impl VectorDB {
         let mut count = 0;
         for id in ids {
             if self.entries.remove(id).is_some() {
-                self.hnsw.lock().unwrap().remove(id);
+                self.hnsw.lock().remove(id);
                 count += 1;
             }
         }
@@ -252,7 +253,7 @@ impl VectorDB {
     }
 
     pub fn hnsw_layers(&self) -> usize {
-        self.hnsw.lock().unwrap().layers()
+        self.hnsw.lock().layers()
     }
 
     // ── Persistence ──
@@ -356,7 +357,7 @@ impl VectorDB {
 
             // Insert into entries + HNSW
             let entry = VectorEntry { id: id.clone(), values, metadata };
-            self.hnsw.lock().unwrap().insert(&id, &entry.values);
+            self.hnsw.lock().insert(&id, &entry.values);
             self.entries.insert(id, entry);
             restored += 1;
         }
@@ -366,7 +367,7 @@ impl VectorDB {
     }
 }
 
-pub type SharedVectorDB = Arc<RwLock<VectorDB>>;
+pub type SharedVectorDB = Arc<PLRwLock<VectorDB>>;
 
 // ── Tests ──
 

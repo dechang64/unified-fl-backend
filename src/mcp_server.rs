@@ -182,6 +182,8 @@ pub struct FedCtxMcpServer {
     graph_store: Arc<JsonGraphStore>,
     audit_chain: SharedAuditChain,
     memory_store: Arc<HnswMemoryStore>,
+    data_dir: Option<std::path::PathBuf>,
+    #[allow(dead_code)]
     tool_router: ToolRouter<FedCtxMcpServer>,
 }
 
@@ -198,8 +200,14 @@ impl FedCtxMcpServer {
             graph_store,
             audit_chain,
             memory_store,
+            data_dir: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    pub fn with_data_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.data_dir = Some(dir);
+        self
     }
 
     // ── Vector Tools ──
@@ -218,9 +226,7 @@ impl FedCtxMcpServer {
             }
         };
 
-        let db = self.vector_db.read().map_err(|e| {
-            McpError::internal_error("lock_error", Some(json!({"error": e.to_string()})))
-        })?;
+        let db = self.vector_db.read();
 
         let results = db.search(&query, params.k);
         let output: Vec<serde_json::Value> = results.iter().map(|hit| {
@@ -240,15 +246,11 @@ impl FedCtxMcpServer {
     async fn stats(&self) -> Result<CallToolResult, McpError> {
         // Extract data before await to avoid holding RwLockReadGuard across await
         let (total_vectors, dimension) = {
-            let db = self.vector_db.read().map_err(|e| {
-                McpError::internal_error("lock_error", Some(json!({"error": e.to_string()})))
-            })?;
+            let db = self.vector_db.read();
             (db.len(), db.dimension())
         };
         let (total_entries, chain_valid) = {
-            let audit = self.audit_chain.read().map_err(|e| {
-                McpError::internal_error("lock_error", Some(json!({"error": e.to_string()})))
-            })?;
+            let audit = self.audit_chain.read();
             (audit.len(), audit.verify().is_ok())
         };
 
@@ -339,9 +341,7 @@ impl FedCtxMcpServer {
         &self,
         Parameters(params): Parameters<AuditRecentParams>,
     ) -> Result<CallToolResult, McpError> {
-        let audit = self.audit_chain.read().map_err(|e| {
-            McpError::internal_error("lock_error", Some(json!({"error": e.to_string()})))
-        })?;
+        let audit = self.audit_chain.read();
 
         let entries: Vec<serde_json::Value> = audit.recent(params.n).iter().map(|b| {
             json!({
@@ -363,9 +363,7 @@ impl FedCtxMcpServer {
         &self,
         Parameters(params): Parameters<InsertVectorParams>,
     ) -> Result<CallToolResult, McpError> {
-        let mut db = self.vector_db.write().map_err(|e| {
-            McpError::internal_error("lock_error", Some(json!({"error": e.to_string()})))
-        })?;
+        let mut db = self.vector_db.write();
 
         let entry = crate::vector_db::VectorEntry {
             id: params.id,
@@ -549,10 +547,29 @@ impl FedCtxMcpServer {
 
     #[tool(description = "Persist all data (vectors, graph, audit chain) to disk. Requires --data-dir to be set at startup.")]
     async fn persist(&self) -> Result<CallToolResult, McpError> {
-        // This is a no-op if data_dir is not set — the runtime handles it
-        Ok(CallToolResult::success(vec![Content::text(
-            "Persist command received. Data will be saved on shutdown if --data-dir is configured.".to_string(),
-        )]))
+        match &self.data_dir {
+            Some(dir) => {
+                let mut saved = Vec::new();
+                let vectors_path = dir.join("vectors.bin");
+                if let Ok(()) = self.vector_db.read().persist(&vectors_path) {
+                    saved.push("vectors.bin");
+                }
+                let audit_path = dir.join("audit.json");
+                if let Ok(()) = self.audit_chain.read().persist(&audit_path) {
+                    saved.push("audit.json");
+                }
+                let graph_path = dir.join("graph.json");
+                if let Ok(()) = self.graph_store.persist(&graph_path) {
+                    saved.push("graph.json");
+                }
+                Ok(CallToolResult::success(vec![Content::text(
+                    format!("Data persisted to {}: {}", dir.display(), saved.join(", "))
+                )]))
+            }
+            None => Ok(CallToolResult::success(vec![Content::text(
+                "No data directory configured. Use --data-dir to enable persistence.".to_string(),
+            )]))
+        }
     }
 }
 

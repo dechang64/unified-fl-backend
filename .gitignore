@@ -2,3 +2,7 @@
 /data/
 *.db
 .env
+*.swp
+*.swo
+*~
+.DS_Store

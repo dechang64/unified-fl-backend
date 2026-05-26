@@ -5,7 +5,7 @@
 //! This enables cross-domain recall: "what did I discover about X?"
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use parking_lot::RwLock;
 use async_trait::async_trait;
 use chrono::Utc;
 
@@ -45,16 +45,34 @@ impl HnswMemoryStore {
         }
     }
 
+    /// Synchronous stats access (for non-async contexts like load_from_disk).
+    pub fn stats_blocking(&self) -> MemoryStoreStats {
+        let timeline = self.timeline.read();
+        let total = timeline.entries.len();
+        let active = timeline.entries.values()
+            .filter(|e| Self::retention_score(e) > 0.5)
+            .count();
+        let cold = total - active;
+        let sessions = timeline.sessions.len();
+
+        MemoryStoreStats {
+            total_memories: total,
+            active_memories: active,
+            cold_memories: cold,
+            sessions,
+        }
+    }
+
     /// Rebuild the session timeline from HNSW vector metadata.
     /// Called after restoring vectors from disk.
     pub fn rebuild_timeline(&self) {
-        let db = self.vector_db.read().unwrap();
-        let mut timeline = self.timeline.write().unwrap();
+        let db = self.vector_db.read();
+        let mut timeline = self.timeline.write();
         timeline.sessions.clear();
         timeline.entries.clear();
 
         for entry in db.all_entries() {
-            if entry.metadata.get("type").map_or(false, |t| t == "memory") {
+            if entry.metadata.get("type").is_some_and(|t| t == "memory") {
                 if let Some(mem_entry) = Self::entry_from_metadata(entry) {
                     let id = mem_entry.id.clone();
                     if let Some(ref sid) = mem_entry.session_id {
@@ -190,7 +208,8 @@ impl MemoryStore for HnswMemoryStore {
         importance: f32,
         metadata: HashMap<String, String>,
     ) -> Result<MemoryEntry, MemoryStoreError> {
-        let id = format!("mem_{}", uuid::Uuid::new_v4().to_string().replace("-", "")[..12].to_string());
+        let uuid_str = uuid::Uuid::new_v4().to_string().replace("-", "");
+        let id = format!("mem_{}", &uuid_str[..12]);
         let entry = MemoryEntry {
             id: id.clone(),
             content: content.to_string(),
@@ -208,9 +227,7 @@ impl MemoryStore for HnswMemoryStore {
         vector_entry.values = values;
 
         {
-            let mut db = self.vector_db.write().map_err(|e| {
-                MemoryStoreError::Internal(format!("db lock poisoned: {e}"))
-            })?;
+            let mut db = self.vector_db.write();
             db.insert(vector_entry).map_err(|e| {
                 MemoryStoreError::Internal(format!("insert failed: {e}"))
             })?;
@@ -218,7 +235,7 @@ impl MemoryStore for HnswMemoryStore {
 
         // Update timeline index
         {
-            let mut timeline = self.timeline.write().unwrap();
+            let mut timeline = self.timeline.write();
             if let Some(ref sid) = entry.session_id {
                 timeline.sessions.entry(sid.clone()).or_default().push(id.clone());
             }
@@ -237,9 +254,7 @@ impl MemoryStore for HnswMemoryStore {
         let query_vec = self.hash_embed(query);
 
         let results = {
-            let db = self.vector_db.read().map_err(|e| {
-                MemoryStoreError::Internal(format!("db lock poisoned: {e}"))
-            })?;
+            let db = self.vector_db.read();
 
             let mut filter = HashMap::new();
             filter.insert("type".to_string(), "memory".to_string());
@@ -274,7 +289,7 @@ impl MemoryStore for HnswMemoryStore {
         n: usize,
         session_id: Option<&str>,
     ) -> Result<Vec<MemoryEntry>, MemoryStoreError> {
-        let timeline = self.timeline.read().unwrap();
+        let timeline = self.timeline.read();
 
         let entries: Vec<MemoryEntry> = if let Some(sid) = session_id {
             // Return entries for specific session
@@ -296,7 +311,7 @@ impl MemoryStore for HnswMemoryStore {
     }
 
     async fn touch(&self, id: &str) -> Result<(), MemoryStoreError> {
-        let mut timeline = self.timeline.write().unwrap();
+        let mut timeline = self.timeline.write();
         if let Some(entry) = timeline.entries.get_mut(id) {
             entry.access_count += 1;
             entry.timestamp = Utc::now().to_rfc3339();
@@ -307,9 +322,7 @@ impl MemoryStore for HnswMemoryStore {
             vector_entry.values = values;
 
             {
-                let mut db = self.vector_db.write().map_err(|e| {
-                    MemoryStoreError::Internal(format!("db lock poisoned: {e}"))
-                })?;
+                let mut db = self.vector_db.write();
                 db.insert(vector_entry).map_err(|e| {
                     MemoryStoreError::Internal(format!("update failed: {e}"))
                 })?;
@@ -321,22 +334,20 @@ impl MemoryStore for HnswMemoryStore {
     }
 
     async fn get(&self, id: &str) -> Result<Option<MemoryEntry>, MemoryStoreError> {
-        let timeline = self.timeline.read().unwrap();
+        let timeline = self.timeline.read();
         Ok(timeline.entries.get(id).cloned())
     }
 
     async fn forget(&self, id: &str) -> Result<bool, MemoryStoreError> {
         // Remove from HNSW
         let deleted = {
-            let mut db = self.vector_db.write().map_err(|e| {
-                MemoryStoreError::Internal(format!("db lock poisoned: {e}"))
-            })?;
+            let mut db = self.vector_db.write();
             db.delete(&[id.to_string()])
         };
 
         // Remove from timeline
         {
-            let mut timeline = self.timeline.write().unwrap();
+            let mut timeline = self.timeline.write();
             if let Some(entry) = timeline.entries.remove(id) {
                 if let Some(ref sid) = entry.session_id {
                     if let Some(ids) = timeline.sessions.get_mut(sid) {
@@ -350,7 +361,7 @@ impl MemoryStore for HnswMemoryStore {
     }
 
     async fn stats(&self) -> MemoryStoreStats {
-        let timeline = self.timeline.read().unwrap();
+        let timeline = self.timeline.read();
         let total = timeline.entries.len();
         let active = timeline.entries.values()
             .filter(|e| Self::retention_score(e) > 0.5)

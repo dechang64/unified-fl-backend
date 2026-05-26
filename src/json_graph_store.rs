@@ -1,12 +1,12 @@
 //! JSON-backed GraphStore implementation
 //!
-//! In-memory graph using HashMaps. Suitable for Phase 0 prototyping.
-//! Will be replaced by GraphLite (ISO GQL) in Phase 2.
+//! In-memory graph using HashMaps with parking_lot::RwLock for high concurrency.
+//! Non-poisoning: if a thread panics while holding a lock, the lock is not poisoned.
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::RwLock;
 use async_trait::async_trait;
+use parking_lot::RwLock;
 
 use crate::traits::*;
 
@@ -18,6 +18,14 @@ pub struct JsonGraphStore {
     adjacency: RwLock<HashMap<String, Vec<(String, String)>>>,
     /// Reverse adjacency: node_id → [(edge_id, source_node_id)]
     reverse_adj: RwLock<HashMap<String, Vec<(String, String)>>>,
+    /// Label index for fast label-based queries
+    label_index: RwLock<HashMap<String, Vec<String>>>,
+}
+
+impl Default for JsonGraphStore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl JsonGraphStore {
@@ -27,6 +35,7 @@ impl JsonGraphStore {
             edges: RwLock::new(HashMap::new()),
             adjacency: RwLock::new(HashMap::new()),
             reverse_adj: RwLock::new(HashMap::new()),
+            label_index: RwLock::new(HashMap::new()),
         }
     }
 
@@ -38,7 +47,7 @@ impl JsonGraphStore {
             edges: Vec<GraphEdge>,
         }
         let data: GraphData = serde_json::from_str(json)
-            .map_err(|e| GraphStoreError::QueryError(format!("JSON parse error: {e}")))?;
+            .map_err(|e| GraphStoreError::Internal(format!("JSON parse error: {e}")))?;
 
         for node in data.nodes {
             self.add_node_sync(node);
@@ -50,48 +59,39 @@ impl JsonGraphStore {
     }
 
     fn add_node_sync(&self, node: GraphNode) {
-        self.nodes.write().unwrap().insert(node.id.clone(), node);
+        let label = node.label.clone();
+        let id = node.id.clone();
+        self.nodes.write().insert(id.clone(), node);
+        self.label_index.write().entry(label).or_default().push(id);
     }
 
     fn add_edge_sync(&self, edge: GraphEdge) {
         let edge_id = edge.id.clone();
         let source = edge.source.clone();
         let target = edge.target.clone();
-
-        self.adjacency
-            .write()
-            .unwrap()
+        self.edges.write().insert(edge_id.clone(), edge);
+        self.adjacency.write()
             .entry(source.clone())
             .or_default()
             .push((edge_id.clone(), target.clone()));
-
-        self.reverse_adj
-            .write()
-            .unwrap()
-            .entry(target.clone())
+        self.reverse_adj.write()
+            .entry(target)
             .or_default()
-            .push((edge_id.clone(), source));
-
-        self.edges.write().unwrap().insert(edge_id, edge);
+            .push((edge_id, source));
     }
-
-    // ── Persistence ──
 
     /// Persist graph to a JSON file.
     pub fn persist(&self, path: &Path) -> Result<(), std::io::Error> {
+        let nodes = self.nodes.read();
+        let edges = self.edges.read();
+        let data = serde_json::json!({
+            "nodes": nodes.values().collect::<Vec<_>>(),
+            "edges": edges.values().collect::<Vec<_>>(),
+        });
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let nodes_guard = self.nodes.read().unwrap();
-        let edges_guard = self.edges.read().unwrap();
-        let nodes: Vec<&GraphNode> = nodes_guard.values().collect();
-        let edges: Vec<&GraphEdge> = edges_guard.values().collect();
-        let data = serde_json::json!({
-            "nodes": nodes,
-            "edges": edges,
-        });
-        let json = serde_json::to_string_pretty(&data)?;
-        std::fs::write(path, json)
+        std::fs::write(path, serde_json::to_string_pretty(&data)?)
     }
 
     /// Restore graph from a JSON file.
@@ -113,146 +113,146 @@ impl GraphStore for JsonGraphStore {
     }
 
     async fn add_edge(&self, edge: GraphEdge) -> Result<(), GraphStoreError> {
+        // Validate source and target exist
+        {
+            let nodes = self.nodes.read();
+            if !nodes.contains_key(&edge.source) {
+                return Err(GraphStoreError::NodeNotFound(edge.source.clone()));
+            }
+            if !nodes.contains_key(&edge.target) {
+                return Err(GraphStoreError::NodeNotFound(edge.target.clone()));
+            }
+        }
         self.add_edge_sync(edge);
         Ok(())
     }
 
-    async fn traverse(
-        &self,
-        start_id: &str,
-        edge_label: Option<&str>,
-        max_hops: usize,
-    ) -> Result<GraphPath, GraphStoreError> {
-        let nodes_map = self.nodes.read().unwrap();
-        let edges_map = self.edges.read().unwrap();
-        let adj = self.adjacency.read().unwrap();
+    async fn get_node(&self, id: &str) -> Result<Option<GraphNode>, GraphStoreError> {
+        Ok(self.nodes.read().get(id).cloned())
+    }
 
-        if !nodes_map.contains_key(start_id) {
-            return Err(GraphStoreError::NodeNotFound(start_id.to_string()));
-        }
+    async fn neighbors(&self, id: &str, edge_label: Option<&str>) -> Result<Vec<GraphNode>, GraphStoreError> {
+        let adj = self.adjacency.read();
+        let edges = self.edges.read();
+        let nodes = self.nodes.read();
 
-        let mut visited_nodes = vec![];
-        let mut visited_edges = vec![];
-        let mut visited_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut queue = vec![(start_id.to_string(), 0usize)];
-        visited_ids.insert(start_id.to_string());
+        let Some(adj_list) = adj.get(id) else {
+            return Ok(vec![]);
+        };
 
-        while let Some((current_id, hops)) = queue.pop() {
-            if let Some(node) = nodes_map.get(&current_id) {
-                visited_nodes.push(node.clone());
-            }
-            if hops >= max_hops {
-                continue;
-            }
-
-            if let Some(neighbors) = adj.get(&current_id) {
-                for (edge_id, target_id) in neighbors {
-                    if visited_ids.contains(target_id) {
+        let mut result = Vec::new();
+        for (edge_id, target_id) in adj_list {
+            if let Some(label) = edge_label {
+                if let Some(edge) = edges.get(edge_id) {
+                    if edge.label != label {
                         continue;
                     }
-                    if let Some(edge) = edges_map.get(edge_id) {
-                        // Filter by edge label if specified
-                        if let Some(label) = edge_label {
-                            if edge.label != label {
-                                continue;
-                            }
-                        }
-                        visited_edges.push(edge.clone());
-                        visited_ids.insert(target_id.clone());
-                        queue.push((target_id.clone(), hops + 1));
-                    }
                 }
             }
-        }
-
-        let edge_count = visited_edges.len();
-        Ok(GraphPath {
-            nodes: visited_nodes,
-            edges: visited_edges,
-            total_weight: edge_count as f32,
-        })
-    }
-
-    async fn get_node(&self, id: &str) -> Result<Option<GraphNode>, GraphStoreError> {
-        Ok(self.nodes.read().unwrap().get(id).cloned())
-    }
-
-    async fn neighbors(
-        &self,
-        node_id: &str,
-        edge_label: Option<&str>,
-    ) -> Result<Vec<GraphNode>, GraphStoreError> {
-        let nodes_map = self.nodes.read().unwrap();
-        let edges_map = self.edges.read().unwrap();
-        let adj = self.adjacency.read().unwrap();
-
-        let mut result = vec![];
-        if let Some(neighbors) = adj.get(node_id) {
-            for (edge_id, target_id) in neighbors {
-                if let Some(edge) = edges_map.get(edge_id) {
-                    if let Some(label) = edge_label {
-                        if edge.label != label {
-                            continue;
-                        }
-                    }
-                    if let Some(node) = nodes_map.get(target_id) {
-                        result.push(node.clone());
-                    }
-                }
+            if let Some(node) = nodes.get(target_id) {
+                result.push(node.clone());
             }
         }
         Ok(result)
     }
 
+    async fn traverse(&self, start_id: &str, edge_label: Option<&str>, max_hops: usize) -> Result<GraphPath, GraphStoreError> {
+        let mut visited_nodes = vec![];
+        let mut visited_edges = vec![];
+
+        {
+            let nodes = self.nodes.read();
+            let edges = self.edges.read();
+            let adj = self.adjacency.read();
+
+            let start_node = nodes.get(start_id)
+                .ok_or_else(|| GraphStoreError::NodeNotFound(start_id.to_string()))?
+                .clone();
+            visited_nodes.push(start_node);
+
+            let mut frontier = vec![start_id.to_string()];
+            let mut seen = std::collections::HashSet::new();
+            seen.insert(start_id.to_string());
+
+            for _hop in 0..max_hops {
+                let mut next_frontier = vec![];
+                for node_id in &frontier {
+                    if let Some(adj_list) = adj.get(node_id) {
+                        for (edge_id, target_id) in adj_list {
+                            if seen.contains(target_id) {
+                                continue;
+                            }
+                            seen.insert(target_id.clone());
+
+                            if let Some(edge) = edges.get(edge_id) {
+                                if let Some(label) = edge_label {
+                                    if edge.label != label {
+                                        continue;
+                                    }
+                                }
+                                visited_edges.push(edge.clone());
+                            }
+                            if let Some(node) = nodes.get(target_id) {
+                                visited_nodes.push(node.clone());
+                                next_frontier.push(target_id.clone());
+                            }
+                        }
+                    }
+                }
+                frontier = next_frontier;
+                if frontier.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        Ok(GraphPath {
+            nodes: visited_nodes,
+            edges: visited_edges,
+            total_weight: 1.0, // Unweighted graph, each edge has weight 1.0
+        })
+    }
+
     async fn stats(&self) -> GraphStoreStats {
-        let nodes = self.nodes.read().unwrap();
-        let edges = self.edges.read().unwrap();
+        self.stats_blocking()
+    }
+}
 
-        let node_labels: Vec<String> = nodes
-            .values()
-            .map(|n| n.label.clone())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+impl JsonGraphStore {
+    /// Synchronous stats access (for non-async contexts like REST handlers).
+    pub fn stats_blocking(&self) -> GraphStoreStats {
+        let nodes = self.nodes.read();
+        let edges = self.edges.read();
+        let _labels = self.label_index.read();
 
-        let edge_labels: Vec<String> = edges
-            .values()
-            .map(|e| e.label.clone())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
+        let mut node_labels = std::collections::HashSet::new();
+        let mut edge_labels = std::collections::HashSet::new();
+        for node in nodes.values() {
+            node_labels.insert(node.label.clone());
+        }
+        for edge in edges.values() {
+            edge_labels.insert(edge.label.clone());
+        }
 
         GraphStoreStats {
             total_nodes: nodes.len(),
             total_edges: edges.len(),
-            node_labels,
-            edge_labels,
+            node_labels: node_labels.into_iter().collect(),
+            edge_labels: edge_labels.into_iter().collect(),
         }
     }
 }
-
-// ── Tests ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_node(id: &str, label: &str) -> GraphNode {
-        GraphNode {
-            id: id.to_string(),
-            label: label.to_string(),
-            properties: HashMap::new(),
-        }
+        GraphNode { id: id.to_string(), label: label.to_string(), properties: HashMap::new() }
     }
 
     fn make_edge(id: &str, source: &str, target: &str, label: &str) -> GraphEdge {
-        GraphEdge {
-            id: id.to_string(),
-            source: source.to_string(),
-            target: target.to_string(),
-            label: label.to_string(),
-            properties: HashMap::new(),
-        }
+        GraphEdge { id: id.to_string(), source: source.to_string(), target: target.to_string(), label: label.to_string(), properties: HashMap::new() }
     }
 
     #[tokio::test]
@@ -313,12 +313,31 @@ mod tests {
         store.add_edge(make_edge("e1", "a", "b", "LINKS")).await.unwrap();
         store.add_edge(make_edge("e2", "b", "c", "LINKS")).await.unwrap();
 
-        // max_hops=1 should only reach b
         let path = store.traverse("a", None, 1).await.unwrap();
         assert_eq!(path.nodes.len(), 2); // a + b
 
-        // max_hops=2 should reach c
         let path = store.traverse("a", None, 2).await.unwrap();
         assert_eq!(path.nodes.len(), 3); // a + b + c
+    }
+
+    #[tokio::test]
+    async fn test_edge_to_missing_node_fails() {
+        let store = JsonGraphStore::new();
+        store.add_node(make_node("a", "A")).await.unwrap();
+        // Edge to non-existent node should fail
+        let result = store.add_edge(make_edge("e1", "a", "missing", "LINKS")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_label_index() {
+        let store = JsonGraphStore::new();
+        store.add_node(make_node("d1", "Disease")).await.unwrap();
+        store.add_node(make_node("d2", "Disease")).await.unwrap();
+        store.add_node(make_node("h1", "Hospital")).await.unwrap();
+
+        let stats = store.stats().await;
+        assert!(stats.node_labels.contains(&"Disease".to_string()));
+        assert!(stats.node_labels.contains(&"Hospital".to_string()));
     }
 }

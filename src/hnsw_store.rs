@@ -1,33 +1,33 @@
 //! HNSW-backed VectorStore implementation
 //!
 //! Adapts the existing VectorDB to the VectorStore trait.
+//! Uses parking_lot::RwLock via SharedVectorDB type alias.
 
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 
 use crate::traits::*;
-use crate::vector_db::{VectorDB, VectorEntry as DbEntry, SearchHit as DbHit, VectorDBError};
+use crate::vector_db::{SharedVectorDB, VectorDB, VectorEntry as DbEntry, SearchHit as DbHit, VectorDBError};
 
 /// HNSW-backed VectorStore implementation.
 pub struct HnswVectorStore {
-    db: Arc<RwLock<VectorDB>>,
+    db: SharedVectorDB,
 }
 
 impl HnswVectorStore {
     pub fn new(dimension: usize) -> Self {
         Self {
-            db: Arc::new(RwLock::new(VectorDB::new(dimension))),
+            db: std::sync::Arc::new(parking_lot::RwLock::new(VectorDB::new(dimension))),
         }
     }
 
-    pub fn from_shared(db: Arc<RwLock<VectorDB>>) -> Self {
+    pub fn from_shared(db: SharedVectorDB) -> Self {
         Self { db }
     }
 
     /// Get a reference to the underlying shared VectorDB.
     /// Useful for backward compatibility with existing gRPC services.
-    pub fn shared(&self) -> Arc<RwLock<VectorDB>> {
+    pub fn shared(&self) -> SharedVectorDB {
         self.db.clone()
     }
 }
@@ -51,9 +51,7 @@ fn convert_hit(hit: DbHit) -> SearchHit {
 #[async_trait]
 impl VectorStore for HnswVectorStore {
     async fn insert(&self, entries: Vec<VectorEntry>) -> Result<usize, VectorStoreError> {
-        let mut db = self.db.write().map_err(|e| {
-            VectorStoreError::Internal(format!("db lock poisoned: {e}"))
-        })?;
+        let mut db = self.db.write();
         let mut count = 0;
         for entry in entries {
             match db.insert(convert_entry(entry)) {
@@ -75,17 +73,14 @@ impl VectorStore for HnswVectorStore {
         k: usize,
         _filter: Option<HashMap<String, String>>,
     ) -> Result<Vec<SearchHit>, VectorStoreError> {
-        let db = self.db.read().map_err(|e| {
-            VectorStoreError::Internal(format!("db lock poisoned: {e}"))
-        })?;
+        let db = self.db.read();
         let results = db.search(query, k);
-        // Apply metadata filter if provided
         let filtered = match _filter {
             Some(filter) => results
                 .into_iter()
                 .filter(|hit| {
                     filter.iter().all(|(k, v)| {
-                        hit.metadata.get(k).map_or(false, |hv| hv == v)
+                        hit.metadata.get(k) == Some(v)
                     })
                 })
                 .collect(),
@@ -95,14 +90,12 @@ impl VectorStore for HnswVectorStore {
     }
 
     async fn delete(&self, ids: &[String]) -> Result<usize, VectorStoreError> {
-        let mut db = self.db.write().map_err(|e| {
-            VectorStoreError::Internal(format!("db lock poisoned: {e}"))
-        })?;
+        let mut db = self.db.write();
         Ok(db.delete(ids))
     }
 
     async fn stats(&self) -> VectorStoreStats {
-        let db = self.db.read().unwrap();
+        let db = self.db.read();
         VectorStoreStats {
             total_vectors: db.len(),
             dimension: db.dimension(),

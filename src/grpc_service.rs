@@ -31,9 +31,7 @@ impl VectorDatabase for VectorDBService {
             return Ok(Response::new(InsertResponse { inserted: 0 }));
         }
 
-        let mut db = self.db.write().map_err(|e| {
-            Status::internal(format!("db lock poisoned: {e}"))
-        })?;
+        let mut db = self.db.write();
         let mut inserted = 0i32;
 
         for v in vectors {
@@ -54,7 +52,8 @@ impl VectorDatabase for VectorDBService {
         }
 
         drop(db);
-        if let Ok(mut audit) = self.audit.write() {
+        {
+            let mut audit = self.audit.write();
             audit.append(
                 EventType::VectorInsert { count: inserted as usize },
                 "grpc",
@@ -75,13 +74,12 @@ impl VectorDatabase for VectorDBService {
             return Ok(Response::new(SearchResponse { results: vec![] }));
         }
 
-        let db = self.db.read().map_err(|e| {
-            Status::internal(format!("db lock poisoned: {e}"))
-        })?;
+        let db = self.db.read();
         let hits = db.search(&query, k);
         drop(db);
 
-        if let Ok(mut audit) = self.audit.write() {
+        {
+            let mut audit = self.audit.write();
             audit.append(
                 EventType::VectorSearch { k, result_count: hits.len() },
                 "grpc",
@@ -107,13 +105,12 @@ impl VectorDatabase for VectorDBService {
             return Ok(Response::new(DeleteResponse { deleted: 0 }));
         }
 
-        let mut db = self.db.write().map_err(|e| {
-            Status::internal(format!("db lock poisoned: {e}"))
-        })?;
+        let mut db = self.db.write();
         let deleted = db.delete(&ids) as i32;
         drop(db);
 
-        if let Ok(mut audit) = self.audit.write() {
+        {
+            let mut audit = self.audit.write();
             audit.append(
                 EventType::VectorDelete { count: deleted as usize },
                 "grpc",
@@ -125,12 +122,8 @@ impl VectorDatabase for VectorDBService {
     }
 
     async fn stats(&self, _req: Request<StatsRequest>) -> Result<Response<StatsResponse>, Status> {
-        let db = self.db.read().map_err(|e| {
-            Status::internal(format!("db lock poisoned: {e}"))
-        })?;
-        let audit = self.audit.read().map_err(|e| {
-            Status::internal(format!("audit lock poisoned: {e}"))
-        })?;
+        let db = self.db.read();
+        let audit = self.audit.read();
         Ok(Response::new(StatsResponse {
             total_vectors: db.len() as i64,
             dimension: db.dimension() as i32,
@@ -160,9 +153,7 @@ impl AuditService for AuditServiceImpl {
     async fn get_trail(&self, req: Request<AuditQuery>) -> Result<Response<AuditTrailResponse>, Status> {
         let req = req.into_inner();
         let limit = if req.limit > 0 { req.limit as usize } else { 50 };
-        let audit = self.audit.read().map_err(|e| {
-            Status::internal(format!("audit lock poisoned: {e}"))
-        })?;
+        let audit = self.audit.read();
         let chain_valid = audit.verify().is_ok();
         let entries = audit.to_proto_entries(limit);
 
@@ -170,9 +161,7 @@ impl AuditService for AuditServiceImpl {
     }
 
     async fn health(&self, _req: Request<HealthRequest>) -> Result<Response<HealthResponse>, Status> {
-        let audit = self.audit.read().map_err(|e| {
-            Status::internal(format!("audit lock poisoned: {e}"))
-        })?;
+        let audit = self.audit.read();
         let chain_valid = audit.verify().is_ok();
         Ok(Response::new(HealthResponse {
             status: if chain_valid { "healthy".into() } else { "degraded".into() },

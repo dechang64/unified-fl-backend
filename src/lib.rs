@@ -23,6 +23,14 @@ pub mod runtime;
 pub mod med_gps_plugin;
 pub mod mcp_server;
 pub mod memory_store;
+pub mod embedding;
+pub mod fl_engine;
+pub mod graphrag;
+pub mod config;
+pub mod metrics;
+pub mod fl_service;
+pub mod graphrag_service;
+pub mod embedding_service;
 
 pub mod proto {
     tonic::include_proto!("federated_ai");
@@ -46,3 +54,8 @@ pub use runtime::FedCtxRuntime;
 pub use med_gps_plugin::MedGpsPlugin;
 pub use mcp_server::FedCtxMcpServer;
 pub use memory_store::HnswMemoryStore;
+pub use embedding::{EmbeddingProvider, HashEmbedder, OnnxEmbedder};
+pub use fl_engine::{FlEngine, FedAvg, FedProx, EWA, DifferentialPrivacy, GaussianDP, LaplaceDP};
+pub use graphrag::{GraphRAGEngine, GraphRAGConfig, RetrievedSubgraph, ScoredNode};
+pub use config::FedCtxConfig;
+pub use metrics::{Metrics, SharedMetrics};

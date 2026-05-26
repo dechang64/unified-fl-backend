@@ -71,10 +71,11 @@ impl MedGpsService for MedGpsServiceImpl {
             &hospital_results,
             &experience_results,
             &self.audit,
-        )?;
+        ).map_err(|e| *e)?;
 
         // Audit log
-        if let Ok(mut audit) = self.audit.write() {
+        {
+    let mut audit = self.audit.write();
             audit.append(
                 EventType::Custom {
                     name: "med_gps_navigate".into(),
@@ -121,9 +122,7 @@ impl MedGpsService for MedGpsServiceImpl {
 
         // Audit log
         let audit_hash = {
-            let mut audit = self.audit.write().map_err(|e| {
-                Status::internal(format!("audit lock poisoned: {e}"))
-            })?;
+            let mut audit = self.audit.write();
             audit.append(
                 EventType::Custom {
                     name: "experience_submitted".into(),
@@ -160,11 +159,9 @@ impl MedGpsService for MedGpsServiceImpl {
 
         let k = if req.k > 0 { req.k as usize } else { 5 };
 
-        let db = self.db.read().map_err(|e| {
-            Status::internal(format!("db lock poisoned: {e}"))
-        })?;
+        let db = self.db.read();
 
-        let query: Vec<f32> = req.query.into_iter().map(|v| v as f32).collect();
+        let query: Vec<f32> = req.query;
         let hits = db.search(&query, k);
 
         // Filter to experiences only
@@ -185,7 +182,8 @@ impl MedGpsService for MedGpsServiceImpl {
             .collect();
 
         // Audit
-        if let Ok(mut audit) = self.audit.write() {
+        {
+    let mut audit = self.audit.write();
             audit.append(
                 EventType::VectorSearch {
                     k: results.len(),
@@ -225,10 +223,7 @@ fn search_by_metadata(
     entity_type: &str,
     max_results: usize,
 ) -> Vec<SearchResult> {
-    let db = match db.read() {
-        Ok(db) => db,
-        Err(_) => return vec![],
-    };
+    let db = db.read();
 
     // Get all vectors and filter by metadata
     let all = db.all_entries();
@@ -272,7 +267,7 @@ fn build_navigation_route(
     hospitals: &[SearchResult],
     experiences: &[SearchResult],
     audit: &SharedAuditChain,
-) -> Result<NavigationRoute, Status> {
+) -> Result<NavigationRoute, Box<Status>> {
     let route_id = format!("route_{}", chrono::Utc::now().format("%Y%m%d%H%M%S"));
 
     let mut steps = Vec::new();
@@ -313,7 +308,7 @@ fn build_navigation_route(
             audit_hash: String::new(),
         });
 
-        total_cost += cost as f32;
+        total_cost += cost;
         total_days += wait_days;
     }
 
@@ -428,12 +423,9 @@ fn build_navigation_route(
 
     // Compute audit hash
     let audit_hash = {
-        if let Ok(a) = audit.read() {
-            let entries = a.recent(1);
-            entries.first().map(|b| b.hash.clone()).unwrap_or_default()
-        } else {
-            String::new()
-        }
+        let a = audit.read();
+        let entries = a.recent(1);
+        entries.first().map(|b| b.hash.clone()).unwrap_or_default()
     };
 
     // Set audit hash on first step

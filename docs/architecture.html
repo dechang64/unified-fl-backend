@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FedCtx v0.7.0 Architecture</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+    background: #0a0e1a;
+    color: #e0e6f0;
+    padding: 40px;
+    min-width: 1200px;
+  }
+  .title {
+    text-align: center;
+    margin-bottom: 8px;
+    font-size: 28px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa, #f472b6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .subtitle {
+    text-align: center;
+    font-size: 14px;
+    color: #64748b;
+    margin-bottom: 32px;
+    letter-spacing: 2px;
+  }
+
+  /* Layer container */
+  .layer {
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .layer-label {
+    position: absolute;
+    top: -10px;
+    left: 20px;
+    background: #0a0e1a;
+    padding: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+  }
+
+  /* App layer - orange */
+  .layer-app { border-color: rgba(251,146,60,0.3); background: rgba(251,146,60,0.04); }
+  .layer-app .layer-label { color: #fb923c; }
+
+  /* Plugin layer - pink */
+  .layer-plugin { border-color: rgba(244,114,182,0.3); background: rgba(244,114,182,0.04); }
+  .layer-plugin .layer-label { color: #f472b6; }
+
+  /* Engine layer - purple */
+  .layer-engine { border-color: rgba(167,139,250,0.3); background: rgba(167,139,250,0.04); }
+  .layer-engine .layer-label { color: #a78bfa; }
+
+  /* Trait layer - blue */
+  .layer-trait { border-color: rgba(96,165,250,0.3); background: rgba(96,165,250,0.04); }
+  .layer-trait .layer-label { color: #60a5fa; }
+
+  /* Impl layer - green */
+  .layer-impl { border-color: rgba(52,211,153,0.3); background: rgba(52,211,153,0.04); }
+  .layer-impl .layer-label { color: #34d399; }
+
+  /* Infra layer - gray */
+  .layer-infra { border-color: rgba(148,163,184,0.3); background: rgba(148,163,184,0.04); }
+  .layer-infra .layer-label { color: #94a3b8; }
+
+  /* Missing layer - red dashed */
+  .layer-missing {
+    border: 2px dashed rgba(239,68,68,0.4);
+    background: rgba(239,68,68,0.03);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    position: relative;
+  }
+  .layer-missing .layer-label { color: #ef4444; }
+
+  /* Module cards */
+  .modules {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 6px;
+  }
+  .mod {
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    min-width: 120px;
+    position: relative;
+  }
+  .mod-name {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 2px;
+  }
+  .mod-desc {
+    font-size: 10px;
+    opacity: 0.6;
+    line-height: 1.3;
+  }
+  .mod-tag {
+    position: absolute;
+    top: -6px;
+    right: -4px;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+
+  /* Card colors by type */
+  .mod-app { background: rgba(251,146,60,0.12); border: 1px solid rgba(251,146,60,0.25); }
+  .mod-plugin { background: rgba(244,114,182,0.12); border: 1px solid rgba(244,114,182,0.25); }
+  .mod-engine { background: rgba(167,139,250,0.12); border: 1px solid rgba(167,139,250,0.25); }
+  .mod-trait { background: rgba(96,165,250,0.15); border: 1px solid rgba(96,165,250,0.3); }
+  .mod-impl { background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.25); }
+  .mod-infra { background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.2); }
+  .mod-missing { background: rgba(239,68,68,0.08); border: 1px dashed rgba(239,68,68,0.35); color: #fca5a5; }
+
+  /* Tags */
+  .tag-done { background: #059669; color: white; }
+  .tag-partial { background: #d97706; color: white; }
+  .tag-missing { background: #dc2626; color: white; }
+  .tag-new { background: #7c3aed; color: white; }
+
+  /* Arrow between layers */
+  .arrow {
+    text-align: center;
+    font-size: 18px;
+    color: #334155;
+    margin: 4px 0;
+    letter-spacing: 8px;
+  }
+
+  /* Stats bar */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 32px;
+    margin-top: 24px;
+    padding: 16px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .stat-val {
+    font-size: 24px;
+    font-weight: 700;
+    text-align: center;
+  }
+  .stat-label {
+    font-size: 10px;
+    color: #64748b;
+    text-align: center;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .stat-val.blue { color: #60a5fa; }
+  .stat-val.green { color: #34d399; }
+  .stat-val.purple { color: #a78bfa; }
+  .stat-val.orange { color: #fb923c; }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    justify-content: center;
+    gap: 20px;
+    margin-top: 16px;
+    font-size: 11px;
+    color: #64748b;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .legend-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+
+<div class="title">FedCtx v0.7.0 — 联邦语义基础设施架构</div>
+<div class="subtitle">FEDERATED SEMANTIC INFRASTRUCTURE &nbsp;·&nbsp; 57 TESTS &nbsp;·&nbsp; 7.8MB BINARY &nbsp;·&nbsp; RUST 1.95</div>
+
+<!-- ═══ Application Layer ═══ -->
+<div class="layer layer-app">
+  <div class="layer-label">应用层 APPLICATION</div>
+  <div class="modules">
+    <div class="mod mod-app">
+      <div class="mod-name">🏥 Organoid-FL</div>
+      <div class="mod-desc">类器官图像分析<br>YOLO+DINOv2+SAM2</div>
+      <div class="mod-tag tag-missing">待接入</div>
+    </div>
+    <div class="mod mod-app">
+      <div class="mod-name">💊 Med GPS</div>
+      <div class="mod-desc">罕见病就医导航<br>患者画像→路线生成</div>
+      <div class="mod-tag tag-done">已接入</div>
+    </div>
+    <div class="mod mod-app">
+      <div class="mod-name">🧬 Antibody Design</div>
+      <div class="mod-desc">抗体设计<br>结构预测+亲和力优化</div>
+      <div class="mod-tag tag-missing">规划中</div>
+    </div>
+    <div class="mod mod-app">
+      <div class="mod-name">💰 FinSentinel</div>
+      <div class="mod-desc">金融合规监控<br>情绪分析+风险预警</div>
+      <div class="mod-tag tag-missing">规划中</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<!-- ═══ Plugin Layer ═══ -->
+<div class="layer layer-plugin">
+  <div class="layer-label">插件层 SCENARIO PLUGIN</div>
+  <div class="modules">
+    <div class="mod mod-plugin">
+      <div class="mod-name">ScenarioPlugin trait</div>
+      <div class="mod-desc">id / name / initialize<br>rest_routes / shutdown</div>
+    </div>
+    <div class="mod mod-plugin">
+      <div class="mod-name">MedGpsPlugin</div>
+      <div class="mod-desc">gRPC MedGpsService<br>set_concrete_stores()</div>
+    </div>
+    <div class="mod mod-plugin" style="opacity:0.4">
+      <div class="mod-name">OrganoidPlugin</div>
+      <div class="mod-desc">检测/分割/FL训练<br>Vision RAG</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<!-- ═══ Engine Layer ═══ -->
+<div class="layer layer-engine">
+  <div class="layer-label">引擎层 ENGINE</div>
+  <div class="modules">
+    <div class="mod mod-engine">
+      <div class="mod-name">FL Engine</div>
+      <div class="mod-desc">FedAvg / FedProx / EWA<br>GaussianDP / LaplaceDP<br>Round 管理 + 审计</div>
+    </div>
+    <div class="mod mod-engine">
+      <div class="mod-name">GraphRAG</div>
+      <div class="mod-desc">向量检索→图谱扩展→重排序<br>multi-hop + centrality</div>
+    </div>
+    <div class="mod mod-engine">
+      <div class="mod-name">EmbeddingProvider</div>
+      <div class="mod-desc">HashEmbedder ✅<br>OnnxEmbedder ⏳</div>
+      <div class="mod-tag tag-partial">部分</div>
+    </div>
+    <div class="mod mod-engine" style="opacity:0.4">
+      <div class="mod-name">AccessControl</div>
+      <div class="mod-desc">RBAC / ABAC<br>API Key + 权限</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+    <div class="mod mod-engine" style="opacity:0.4">
+      <div class="mod-name">EventBus</div>
+      <div class="mod-desc">插件间异步通信<br>发布/订阅</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<!-- ═══ Trait Layer ═══ -->
+<div class="layer layer-trait">
+  <div class="layer-label">抽象层 TRAIT (CoreStores)</div>
+  <div class="modules">
+    <div class="mod mod-trait">
+      <div class="mod-name">VectorStore</div>
+      <div class="mod-desc">insert / search / delete<br>stats</div>
+    </div>
+    <div class="mod mod-trait">
+      <div class="mod-name">GraphStore</div>
+      <div class="mod-desc">add_node / add_edge<br>traverse / neighbors</div>
+    </div>
+    <div class="mod mod-trait">
+      <div class="mod-name">AuditLog</div>
+      <div class="mod-desc">append / verify<br>recent / len</div>
+    </div>
+    <div class="mod mod-trait">
+      <div class="mod-name">MemoryStore</div>
+      <div class="mod-desc">remember / recall<br>recent / forget / touch</div>
+    </div>
+    <div class="mod mod-trait" style="opacity:0.4">
+      <div class="mod-name">KeyStore</div>
+      <div class="mod-desc">密钥管理<br>签名/验签</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<!-- ═══ Implementation Layer ═══ -->
+<div class="layer layer-impl">
+  <div class="layer-label">实现层 IMPLEMENTATION</div>
+  <div class="modules">
+    <div class="mod mod-impl">
+      <div class="mod-name">HnswVectorStore</div>
+      <div class="mod-desc">自研 HNSW 384-dim<br>metadata 过滤</div>
+    </div>
+    <div class="mod mod-impl">
+      <div class="mod-name">JsonGraphStore</div>
+      <div class="mod-desc">HashMap + 邻接表<br>label 索引</div>
+    </div>
+    <div class="mod mod-impl">
+      <div class="mod-name">ChainAuditLog</div>
+      <div class="mod-desc">SHA-256 哈希链<br>增量 Merkle 根<br>SQLite 原子持久化</div>
+    </div>
+    <div class="mod mod-impl">
+      <div class="mod-name">HnswMemoryStore</div>
+      <div class="mod-desc">HNSW 语义召回<br>Ebbinghaus 遗忘曲线</div>
+    </div>
+    <div class="mod mod-impl" style="opacity:0.4">
+      <div class="mod-name">Ed25519KeyStore</div>
+      <div class="mod-desc">数字签名<br>审计链签名验证</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow">▼</div>
+
+<!-- ═══ Infrastructure Layer ═══ -->
+<div class="layer layer-infra">
+  <div class="layer-label">基础设施层 INFRASTRUCTURE</div>
+  <div class="modules">
+    <div class="mod mod-infra">
+      <div class="mod-name">FedCtxRuntime</div>
+      <div class="mod-desc">插件注册/初始化<br>自动持久化 / graceful shutdown</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">gRPC :50051</div>
+      <div class="mod-desc">VectorDB / Audit<br>MedGps / FL / GraphRAG / Embed</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">REST :8080</div>
+      <div class="mod-desc">/search /insert /stats<br>/audit /metrics</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">MCP stdio</div>
+      <div class="mod-desc">14 Tools<br>Vector/Graph/Memory/Audit</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">FedCtxConfig</div>
+      <div class="mod-desc">TOML 分层配置<br>file → env → cli</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">Prometheus</div>
+      <div class="mod-desc">/metrics 端点<br>12 计数器 + uptime</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">SQLite WAL</div>
+      <div class="mod-desc">审计链原子写入<br>vectors + audit_blocks</div>
+    </div>
+    <div class="mod mod-infra">
+      <div class="mod-name">Python SDK</div>
+      <div class="mod-desc">FedCtxClient<br>全接口覆盖</div>
+    </div>
+    <div class="mod mod-infra" style="opacity:0.4">
+      <div class="mod-name">Health Check</div>
+      <div class="mod-desc">/health 端点<br>依赖检测</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+    <div class="mod mod-infra" style="opacity:0.4">
+      <div class="mod-name">Rate Limiter</div>
+      <div class="mod-desc">API 限流<br>令牌桶/滑动窗口</div>
+      <div class="mod-tag tag-missing">缺失</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Missing Summary ═══ -->
+<div class="layer-missing" style="margin-top: 20px;">
+  <div class="layer-label">🔴 缺失模块 GAP ANALYSIS</div>
+  <div class="modules">
+    <div class="mod mod-missing">
+      <div class="mod-name">🔐 AccessControl</div>
+      <div class="mod-desc">RBAC/ABAC 权限控制<br>API Key 认证<br>多租户隔离</div>
+      <div class="mod-tag tag-missing">P0</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">🔑 KeyStore + 签名</div>
+      <div class="mod-desc">Ed25519 密钥管理<br>审计链数字签名<br>签名验证</div>
+      <div class="mod-tag tag-missing">P0</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">📡 EventBus</div>
+      <div class="mod-desc">插件间异步通信<br>发布/订阅模式<br>事件溯源</div>
+      <div class="mod-tag tag-missing">P1</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">🚦 Rate Limiter</div>
+      <div class="mod-desc">API 限流保护<br>令牌桶算法<br>per-client 限制</div>
+      <div class="mod-tag tag-missing">P1</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">💓 Health Check</div>
+      <div class="mod-desc">/health 端点<br>依赖就绪检测<br>K8s liveness/readiness</div>
+      <div class="mod-tag tag-missing">P1</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">🧪 OrganoidPlugin</div>
+      <div class="mod-desc">类器官分析插件<br>对接 organoid-fl<br>Vision RAG</div>
+      <div class="mod-tag tag-missing">P1</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">🤖 OnnxEmbedder</div>
+      <div class="mod-desc">ONNX Runtime 接入<br>DINOv2/sentence-transformers<br>语义嵌入</div>
+      <div class="mod-tag tag-partial">P2</div>
+    </div>
+    <div class="mod mod-missing">
+      <div class="mod-name">🌐 MCP HTTP</div>
+      <div class="mod-desc">MCP Streamable HTTP<br>远程部署支持</div>
+      <div class="mod-tag tag-missing">P2</div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Stats ═══ -->
+<div class="stats">
+  <div>
+    <div class="stat-val blue">6</div>
+    <div class="stat-label">Trait 抽象</div>
+  </div>
+  <div>
+    <div class="stat-val green">4</div>
+    <div class="stat-label">实现模块</div>
+  </div>
+  <div>
+    <div class="stat-val purple">3</div>
+    <div class="stat-label">引擎模块</div>
+  </div>
+  <div>
+    <div class="stat-val orange">6</div>
+    <div class="stat-label">gRPC 服务</div>
+  </div>
+  <div>
+    <div class="stat-val" style="color:#ef4444">8</div>
+    <div class="stat-label">缺失模块</div>
+  </div>
+  <div>
+    <div class="stat-val" style="color:#34d399">57</div>
+    <div class="stat-label">测试通过</div>
+  </div>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:#059669"></div> 已完成</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#d97706"></div> 部分完成</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#dc2626"></div> 缺失</div>
+  <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div> 新增</div>
+</div>
+
+</body>
+</html>

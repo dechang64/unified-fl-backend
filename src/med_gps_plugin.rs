@@ -14,6 +14,12 @@ pub struct MedGpsPlugin {
     audit: std::sync::OnceLock<SharedAuditChain>,
 }
 
+impl Default for MedGpsPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MedGpsPlugin {
     pub fn new() -> Self {
         Self {
@@ -28,6 +34,18 @@ impl MedGpsPlugin {
         let db = self.db.get()?.clone();
         let audit = self.audit.get()?.clone();
         Some(crate::med_gps_service::create_med_gps_server(db, audit))
+    }
+
+    /// Set the concrete stores directly (called by runtime during initialization).
+    /// This avoids the need for downcast on trait objects.
+    pub fn set_concrete_stores(
+        &self,
+        db: SharedVectorDB,
+        audit: SharedAuditChain,
+    ) -> Result<(), &'static str> {
+        self.db.set(db).map_err(|_| "vector_db already initialized")?;
+        self.audit.set(audit).map_err(|_| "audit_chain already initialized")?;
+        Ok(())
     }
 }
 
@@ -47,16 +65,16 @@ impl ScenarioPlugin for MedGpsPlugin {
 
     async fn initialize(
         &self,
-        stores: CoreStores,
+        _stores: CoreStores,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.db.set(stores.vector_db).map_err(|_| "vector_db already initialized")?;
-        self.audit.set(stores.audit_chain).map_err(|_| "audit_chain already initialized")?;
-        // memory_store is available in stores but MedGpsPlugin doesn't use it yet
+        // MedGpsPlugin uses concrete types (SharedVectorDB, SharedAuditChain)
+        // which are set via set_concrete_stores() by the runtime.
+        // The trait-object CoreStores are available for plugins that don't
+        // need concrete types.
         Ok(())
     }
 
     fn rest_routes(&self) -> Option<axum::Router> {
-        // MedGps currently only uses gRPC; REST routes can be added here
         None
     }
 }
