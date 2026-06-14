@@ -359,3 +359,73 @@ service EmbeddingService {
   // 文本 → 向量
   rpc Embed(EmbedRequest) returns (EmbedResponse);
 }
+
+// ══════════════════════════════════════════════════════════════
+// Hybrid Search — 混合检索（PageIndex + HNSW + PageRank）
+// ══════════════════════════════════════════════════════════════
+
+message HybridSearchRequest {
+  string query = 1;                    // 查询文本
+  repeated float query_vector = 2;     // 查询向量（可选，语义检索需要）
+  int32 k = 3;                         // 返回结果数量
+  string doc_id = 4;                   // 指定文档 ID（可选）
+}
+
+message HybridSearchHitProto {
+  string id = 1;
+  string title = 2;
+  double score = 3;
+  double rrf_score = 4;
+  double pagerank_score = 5;
+  double final_score = 6;
+  repeated string sources = 7;         // "pageindex", "hnsw"
+  map<string, string> metadata = 8;
+}
+
+message RoutingInfoProto {
+  string query_type = 1;               // "structural", "semantic", "hybrid"
+  double confidence = 2;
+  string reason = 3;
+}
+
+message HybridSearchResponse {
+  RoutingInfoProto routing = 1;
+  repeated HybridSearchHitProto results = 2;
+  int32 pageindex_count = 3;
+  int32 hnsw_count = 4;
+}
+
+service HybridSearchService {
+  // 混合检索：查询路由 → 双通道检索 → RRF融合 → PageRank重排序
+  rpc Search(HybridSearchRequest) returns (HybridSearchResponse);
+}
+
+// ══════════════════════════════════════════════════════════════
+// KG Builder — 知识图谱构建
+// ══════════════════════════════════════════════════════════════
+
+message BuildKGFromTreeRequest {
+  string doc_id = 1;
+  string doc_name = 2;
+  // Tree nodes serialized as JSON (PageIndexNode[])
+  string tree_json = 3;
+}
+
+message BuildKGFromPatentsRequest {
+  // Patent records serialized as JSON (PatentRecord[])
+  string patents_json = 1;
+}
+
+message KGBuildStatsProto {
+  int32 nodes_added = 1;
+  int32 edges_added = 2;
+  int32 entities_extracted = 3;
+  int32 cooccurrence_edges = 4;
+}
+
+service KGBuilderService {
+  // 从 PageIndex 树构建知识图谱
+  rpc BuildFromTree(BuildKGFromTreeRequest) returns (KGBuildStatsProto);
+  // 从专利数据构建知识图谱
+  rpc BuildFromPatents(BuildKGFromPatentsRequest) returns (KGBuildStatsProto);
+}

@@ -36,6 +36,7 @@ pub mod embedding_service;
 pub mod pagerank;
 pub mod pageindex;
 pub mod hybrid_search;
+pub mod kg_builder;
 
 pub mod proto {
     tonic::include_proto!("federated_ai");
@@ -70,3 +71,4 @@ pub use hybrid_search::{
     HybridSearchEngine, HybridSearchHit, QueryType, RoutingResult,
     route_query, rrf_fuse, pagerank_rerank,
 };
+pub use kg_builder::{KGBuilder, PatentRecord, KGBuildStats};
