@@ -59,6 +59,7 @@ async-trait = "0.1"
 rmcp = { version = "1.7.0", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.2.1"
 uuid = { version = "1", features = ["v4"] }
+regex = "1"
 
 [build-dependencies]
 tonic-build = "0.13"

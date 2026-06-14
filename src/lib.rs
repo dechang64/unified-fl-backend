@@ -32,6 +32,11 @@ pub mod fl_service;
 pub mod graphrag_service;
 pub mod embedding_service;
 
+// FedPageIndex integration
+pub mod pagerank;
+pub mod pageindex;
+pub mod hybrid_search;
+
 pub mod proto {
     tonic::include_proto!("federated_ai");
 }
@@ -59,3 +64,9 @@ pub use fl_engine::{FlEngine, FedAvg, FedProx, EWA, DifferentialPrivacy, Gaussia
 pub use graphrag::{GraphRAGEngine, GraphRAGConfig, RetrievedSubgraph, ScoredNode};
 pub use config::FedCtxConfig;
 pub use metrics::{Metrics, SharedMetrics};
+pub use pagerank::{PageRankResult, PageRankConfig, FederatedPageRank};
+pub use pageindex::{PageIndexStore, PageIndexNode, PageIndexDocument, PageIndexHit};
+pub use hybrid_search::{
+    HybridSearchEngine, HybridSearchHit, QueryType, RoutingResult,
+    route_query, rrf_fuse, pagerank_rerank,
+};
