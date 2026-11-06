@@ -25,3 +25,6 @@ EXPOSE 50051 8080
 
 ENTRYPOINT ["unified-fl-backend"]
 CMD ["--dimension", "384", "--grpc-port", "50051", "--http-port", "8080", "--db-path", "/data/vectors.db"]
+
+RUN useradd -m -s /bin/bash appuser
+USER appuser
